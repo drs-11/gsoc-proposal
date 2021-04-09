@@ -20,159 +20,255 @@ Country: India
 
 ## Abstract
 
-This project aims to add enhancements to Scrapy's Item Pipeline components. These enhancements consists of item filters, feed compression and batch delivery triggers. 
+This project aims to add enhancements to Scrapy's Feed Exporter components. These enhancements consists of item filters, feed post-processing and batch delivery triggers. 
 
 ## Deliverables
 
-...
+- Item filters which will decide what items must or must not be exported
+
+- Feed post processing feature which will use pluginable components to process export files before storing them
+
+- Batch delivery triggers based on certain constraints which can also be user defined
 
 ## Technical Details
 
 1. #### Filter Items
 
-**Solution:** Items can be filtered based on their class type or/and on some certain conditions.  These filters can be either defined in ```settings.py``` or in user's custom ```Item``` class. A criteria argument can be passed to ```Field``` when declaring fields in user's custom Item. There can be a set of buitlin filters such as 'greeater than', 'less than', etc. ```_FeedSlot``` can then can use these filters to tell ```FeedExporter``` to export them or not.
+**Solution:**  
 
-There could be conflicting criterias when declaring both in settings.py as well in custom class items so some precedence order here could be necessary.
+Items can be filtered based on their class type or/and on some certain conditions. For providing maximum flexibility for filtering items, an ```ItemChecker``` class can be used which can be extended by the user to suit their needs of filtering.  This will be a simple implementation which won't break much code(hopefully).
+
+There will be 3 main public methods which will be used in item filtering of which ```accepts_item``` and ```accepts_fields``` can be overridden by user. Subdividing ```accepts``` into 2 methods will help create simple code and will be easier to debug and test.
+
+These filters can be declared in ```settings.py```. When the ```FeedExporter``` is initialised, ```load_object``` loads the declared filters. These loaded filters can then be used by storage slots.
 
 **Definitions/Examples:** 
+
+ItemChecker class prototype(This by no means is complete and will probably require
+
+more attrubutes and methods):
+
+```python
+class ItemChecker:
+    accepted_items = []    # list of Items user wants to accept
+
+    def __init__(self):
+        # load accepted_items here 
+
+    def accepts(self, item):
+        """
+        Main method which will check if item is acceptable or not
+        :param item: scraped item which user wants to check if is acceptable
+        :type item: scrapy supported items
+        :return: `True` if accepted, `False` otherwise
+        :rtype: bool
+        """
+        adapter = ItemAdapter(item)
+        return self.accepts_item(item) and self.accepts_fields(adapter.asdict())
+
+    def accepts_item(self, item):
+        """
+        Method to check if item as a whole passes filtering criteria. Can be
+        overriden by user if they want their own custom filter.
+        Default behaviour: if accepted_items is empty then all items will be
+        accepted else only items present in accepted_items will be accepted.
+        :param item: scraped item
+        :type item: scrapy supported items
+        :return: `True` if item in accepted_items, `False` otherwise
+        :rtype: bool
+        """
+        if self.accepted_items:
+            return isinstance(item, self.accepted_items)
+
+        return True    # all items accepted if none declared in accepted_items
+
+    def accepts_fields(self, fields):
+        """
+        Method to check if certain fields of the item passes the filtering
+        criteria. Users can override this method to add their own custom
+        filters.
+        Default behaviour: accepts all fields.
+        :param fields: all the fields of the scraped item
+        :type fields: dict
+        :return: `True` if all the fields passes the filtering criteria, else `False`
+        :rtype: bool
+        """
+        return True    # all fields accepted if user doesn't override and write their custom filter
+```
 
 ```settings.py``` example:
 
 ```python
 FEEDS = {
-    'items.json': {
+    'items1.json': {
         'format': 'json',
-        'fields': ['field1', 'field2', 'field3'],
-        'fields_filter': {
-            'field1': ('gt', 100),    # (comparator, value_to_compare_against)
-            'field2': ('lt', 200),    # field2 < 200
-            'field3': ('cus', 300),   # custom logic with 300 as threshold
-         },
-        'item_classes': (Item_1, Item_2),
+        'item_filter': 'MyFilter1'
+    },
+    'items2.xml': {
+        'format': 'xml',
+        'item_filter': 'MyFilter2',
     },
 }
-```
 
-Filtering method prototype in ```_FeedSlot```:
 
-```python
-def accepts(self, item):
-    if self.item_classes and type(item) not in self.item_classes:
-        return False
-
-    for field, criteria in self.fields_filter:
-         if not item.matches(field, criteria):
-            return False
-
-    for field, field_obj in item.fields.items():
-        if not item.matches(field, field_obj.criteria):
-            return False
-
-    return True
-```
-
-Matching method which can be overriden by user in ```Item```:
-
-```python
-class Item:
-#
-# original code
-#
-    def matches(self, field, criteria):
-        if criteria[0] == "cus":
-            return self.custom_matcher(field, criteria)
-
-        return self._matcher(field, criteria)
-
-    def _matcher(self, field, criteria)
-        #
-        # some builtin criteria checks
-        #
-        return match_status
-
-    def custom_matcher(self, field, criteria):
-        raise NotImplementedError
-
-class CustomItem(Item):
-    field1 = Field(criteria=('gt', 500))
-    field2 = Field()
-
-    def custom_matcher(self, field, criteria):
-        #
-        # some custom criteria checks
-        # 
-        return match_status
+ITEM_FILTERS = {
+    'MyFilter1': 'myproject.filterfile.MyFilter1',
+    'MyFilter2': 'myproject.filterfile.MyFilter2',
+}
 ```
 
 **Control Flow:** 
 
+Loading the declared filter:
+
 ```
-1. slots are created with attributes including fields_filter and item_classes
-    imported from settings
-2. when an item is scraped
-    i. iterate over slots
-    ii. pass item to current slot's acceptance method
-    iii. the acceptance method will use slot's attributes and item's 
-        matches method to determine match_status
-    iv. if item is accepted by slot, it is exported by slot
-    v. else iteration continues
-        
+1. FeedExporter initialises
+    i. FeedExporter.filters dict is loaded with (key: uri, value: filter class) from ITEM_FILTERS
+2. when _start_new_batch is invoked
+    i. instance of filter assigned for the slot's uri is created
+    ii. slot is initialised with filter as one of the attributes
 ```
 
+Using the filter:
 
+```
+1. item_scraped method is invoked
+    i. slots are iterated
+    ii. for the given slot, slot.item_checker.accepts(item) is invoked
+        a. if returned True, item is exported
+        b. else, item is discarded
+```
 
-2. #### Feed Compression
+2. #### Feed Post Processing
 
 **Solution:** 
 
-I propose to implement 3 convenient ways to compress feeds. As archiving and compression go hand in hand we can use them both. Option 1 can be archiving all the files into a single file be it from separate feeds or batches. This option will be useful when you just want a single archived file as output. Option 2 can be archiving just a feed when it has batches enabled. Option 3 can be simple compression of output files. No archiving here.
+A post-processing feature can help add more extensions dedicated to before-export-processing to scrapy. To help achieve extensibility, a ```PostProcessingManager``` can be used which will use "plugin" like scrapy components to process the feed file before exporting it to its target destination. 
 
-As python has 2 archiving modules (tarfile and zipfile) and 3 compressing modules (gzip, bz2, lzma) in its standard library we can give user the choice to choose from those.
+Every slot can have their own ```PostProcessingManager``` which can then be called before closing the slot to do all the required processing.
 
-There will be certain precedence and assumpations to get consistent output files. Such as when declaring to archive a feed, it should also have declared ```batch_item_count``` otherwise it wouldn't make sense to archive just a single file. If that happens then only compression shall take place. ```FEED_ARCHIVE_ALL``` option will take higher precedence than to those options declared in ```FEEDS``` dict.
+A number of plugins can be created but there will be a need to specify the order in which these plugins are used as some won't be able to process the target file after it has been processed by another(eg: minifying won't work on a compression processed file). These plugins will be required to have a certain Interface so that the ```PostProcessingManager``` can use it without breaking down from unidentified components.
 
-**Definitions/Examples:**
+Few built-in plugins can be made such as minifying, pretty-printing and compression.
 
-```settings.py``` example:
+**Definitions/Examples:** 
+
+PostProcessingManager class prototype:
+
+```python
+class PostProcessingManager:
+    """
+    This will manage all plugins and will use them to conduct post-
+    processing on feed files before they are exported.
+    :param plugins: all the declared plugins for the uri
+    :type plugins: list
+    """
+
+    def __init__(self, plugins):
+        # load the plugins here
+
+    def process(self, file):
+        """
+        Main method to be used to process a file using all the declared 
+        plugins.
+        :param file: file on which processing needs to be done
+        :type file: File-like object
+        """
+
+    def _process_using(self, plugin, file):
+        """
+        Process the file using the given plugin.
+        :param plugin: The plugin that will be used for post-processing on the file
+        :type plugin: PostProcessorPlugin like object
+        """
+
+    def _load_plugins(self):
+        """
+        Loads the plugins from self.plugins using load_object.
+        """
+```
+
+PostProcessorPlugin class inteface:
+
+```python
+class PostProcessorPlugin(Interface):
+    """
+    Interface for plugins that will be used by PostProcessingManager.
+    """
+
+    def __init__(self):
+        """
+        Constructor method.
+        """
+
+    def process(self, file):
+        """
+        Method which will do the processing on the given file.
+        """
+```
+
+GzipPlugin example:
+
+```python
+@implementer(PostProcessorPlugin)
+class GzipPlugin:
+    COMPRESS_LEVEL = 9
+
+    def __init__(self):
+        # constructor
+
+    def process(self, file):
+        # use gzip module methods to compress the given file
+```
+
+settings.py example:
 
 ```python
 FEEDS = {
     'item1.json' : {
-        'compression': 'gzip',
-        'archive': 'tar',
-        'batch_item_count': 10,   # output will be item1.tar.gz
+        'format': 'json',
+        'post-processing': ['gzip'],
     },
     'item2.xml' : {
-        'compression': 'bz2',   # output will be item2.xml.bz2
+        'post-processing': ['beautify','xz'],    # order is important
     },
-    'item3.jl' : {
-        'compression': 'lzma',
-        'batch_item_count': 10   # output will be item3-1.jl.xz, item3-2.jl.xz, ...
+    'item3.jl': {
+        'post-processing': ['myplugin'],
     },
 }
 
 
-FEED_ARCHIVE_ALL = True   # will be used to archive all of the feeds
-FEED_ARCHIVE_ALL_COMPR = 'zipfile'   # default: tarfile
+POST_PROC_PLUGINS = {
+    'gzip': 'scrapy.utils.postprocessors.GzipPlugin',
+    'xz' : 'scrapy.utils.postprocessors.LZMAPlugin',
+    'beautify': 'scrapy.utils.postprocessors.BeautifyPlugin',
+    'myplugin': 'myproject.pluginfile.MyPlugin',
+}
 ```
 
 **Control Flow:**
 
+Initialising slot with ```PostProcessingManager```:
+
 ```
-1) if archive_all conditions are satisfied
-    i) open root_archive file and save ptr to FeedExporter
-    ii) when a slot closes if root_archive exists then add slot's output file to it
-    iii) when spider is closed, close and save the root_archive
-2) else if archive_feed conditions are satisfied
-    i) open a feed_archive and save ptr to feed's attributes
-    ii) when a slot closes, if it's uri template matches feed's then add 
-        slot's output file to feed's archive
-    iii) when spider is closed, close all feed archives
-3) else if compression_only conditions are satisfied
-    i) pass compression_type to batch_creator_method
-    ii) batch_creator_method will load appropriate compression module and 
-        use the compression file like object
+1. FeedExporter is initialised
+2. _start_new_batch is invoked
+    i. PostProcessingManager instance is created for the given uri
+    ii. the instance is passed to _FeedSlot
+    iii. _FeedSlot makes the instance as one of its attributes
 ```
+
+PostProcessingManager usage from slot:
+
+```
+1. _close_slot is called from FeedExporter
+2. slot invokes slot.finish_exporting
+    i. exporter finished exporting
+    ii. PostProcessingManager invokes its 'process' method which processes the
+        slot's file using plugins
+```
+
+
 
 3. #### Batch Delivery Triggers
 
@@ -193,16 +289,25 @@ Batch class template:
 ```python
 class Batch:
 
-    def __init__(self, slot_uri, constraint=None, para_val=None):
+    def __init__(self, slot_uri, constraintone, para_val=None):
         self.uri = slot_uri
         self.constraint = constraint
         self.para_val = para_val
 
-    def update(self, *args):
-        # logic to update para_val
+    def update(self, slot_file=None):
+        """
+        Updates the parameter value according to stats related to paramter
+        value and contraint.
+        :param slot_file: slot's file which is a good source of stats
+        :type slot_file: File like object, optional
+        """
 
-    def check(self):
-        # logic to check if para_val has crossed the constraint
+    def should_trigger(self):
+        """
+        Checks if para_val has crossed the constraint or not.
+        :return: `True` if para_val has crossed constraint, else `False`
+        :rtype: bool
+        """
 ```
 
 settings.py example:
@@ -238,6 +343,17 @@ FEED_BATCH_TRIGGER_BASE = {
 
 **Control Flow:** 
 
+Batch instance creation:
+
+```
+1. FeedExporter is initialised
+    i. batch triggers are loaded into FeedExporter.batch_triggers
+2. _start_new_batch is invoked
+    i. Batch instance is created for the given uri
+    ii. the Batch instance is passed to _FeedSlot for initialisation
+    iii. _FeedSlot stores the Batch instance as an attribute
+```
+
 When using a Batch class as a trigger:
 
 ```
@@ -245,9 +361,11 @@ When using a Batch class as a trigger:
     i. iterate through slots
     ii. if slot accepts the item       // assuming this feature is implemented after item filter
         a. export the item
-        b. update the parameter value of the feed's batch
-        c. if batch's parameter val exceeds constraint
-            1. close and start a new batch of the feed
+        b. call slot.batch.update() to update paramter value
+        c. call slot.batch.should_trigger() to check if parameter value has exceeded
+           constraint
+            1. if True, close and start a new batch of the feed
+            2. else, continue the iteration
     iii. continue slot iteration till complete
 ```
 
@@ -262,7 +380,47 @@ When using a signal as a trigger:
 
 ## Timeline
 
-...
+**May 17, 2021 - June 7, 2021** (Community bonding period)
+
+- Familiarize myself with Scrapy and Zyte community
+
+- Settle and discuss final design details with mentors
+
+- Discuss implementation plans 
+
+- Set up weekly report
+
+**June 7, 2021 - June 21, 2021:** (Week 1-2)
+
+- Start work on Batch Delivery Trigger
+
+- Layout code refactor plan
+
+- Start coding
+  
+  - ...
+
+- Write tests
+
+**June 21, 2021 - July 5, 2021:** (Week 3-4)
+
+- Fix bugs and write documentation
+
+- Start work on Feed Post Processing
+
+- ...
+
+**July 5, 2021 - July 19, 2021:** (Week 5-6)
+
+- ...
+
+**July 19, 2021 - August 2, 2021:** (Week 7-8)
+
+- ...
+
+**August 2, 2021 - August 16, 2021:** (Week 9-10)
+
+- ...
 
 ## Possible Roadblocks
 
@@ -273,12 +431,25 @@ When using a signal as a trigger:
 
 - ### Programming Experience:
   
-  - ...
+  - I was introduced to Python in my high school days. Since then I have explored and delved into computer sciences and applications ultimatley and obviously leading me to pursue a degree in Computer Science(currently in pre-final year).  Python has been my main language for a long time with trying some other languages on the side. I have basic understanding of software workflows and API design.
 
 - ### Personal Projects:
   
-  - ...
+  - [ngc](https://github.com/drs-11/ngc): a git clone in python with basic functionalities
+  - [http-server-client](https://github.com/drs-11/http-server-client): a simple http server and client with multithreading support
 
 - ### Open Source Contributions:
   
-  - ...
+  - [openage](https://github.com/SFTtech/openage)
+  
+  - [lxd](https://github.com/lxc/lxd/)
+  
+  - [scrapy](https://github.com/scrapy/scrapy)
+    
+    - https://github.com/scrapy/scrapy/pull/4752
+    
+    - https://github.com/scrapy/scrapy/pull/4753
+    
+    - https://github.com/scrapy/scrapy/pull/4778
+      
+      
