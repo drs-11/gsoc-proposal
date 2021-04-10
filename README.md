@@ -268,8 +268,6 @@ PostProcessingManager usage from slot:
         slot's file using plugins
 ```
 
-
-
 3. #### Batch Delivery Triggers
 
 **Solution:** 
@@ -293,6 +291,7 @@ class Batch:
         self.uri = slot_uri
         self.constraint = constraint
         self.para_val = para_val
+        self.batch_id = 1
 
     def update(self, slot_file=None):
         """
@@ -307,6 +306,12 @@ class Batch:
         Checks if para_val has crossed the constraint or not.
         :return: `True` if para_val has crossed constraint, else `False`
         :rtype: bool
+        """
+
+    def reset_para_val(self):
+        """
+        Resets parameter value back to its initial value and increments
+        self.batch_id. Will be used after closing a batch.
         """
 ```
 
@@ -341,17 +346,59 @@ FEED_BATCH_TRIGGER_BASE = {
 }
 ```
 
+Spider class method to send signal:
+
+```python
+class Spider(object_ref):
+    # ...
+    # original Spider class codes
+    # ...
+
+    def trigger_batch(self, uri):
+        self.crawler.send_catch_log(
+            signal=signals.stop_batch,
+            uri=uri
+        )
+```
+
+FeedExporter modification to receive signal:
+
+```python
+class FeedExporter:
+    
+    @classmethod
+    def from_crawler(cls, crawler):
+        # original code
+        crawler.signals.connect(exporter.trigger_batch, signals.stop_batch)
+        return exporter
+
+    # ...
+    # original code
+    # ...
+
+    def trigger_batch(self, uri):
+        """
+        Stops and starts a new batch for the given uri.
+        :param uri: uri whose batch will be trigger
+        :type uri: string
+        """
+        # 1. identify the slot fitting uri from self.slots
+        # 2. if such slot exists
+        #     i. close the slot and remove from self.slots
+        #     ii. start a new slot with uri's description and new batch id
+        # 3. else, return
+```
+
 **Control Flow:** 
 
 Batch instance creation:
 
 ```
 1. FeedExporter is initialised
-    i. batch triggers are loaded into FeedExporter.batch_triggers
-2. _start_new_batch is invoked
-    i. Batch instance is created for the given uri
-    ii. the Batch instance is passed to _FeedSlot for initialisation
-    iii. _FeedSlot stores the Batch instance as an attribute
+2. self.batches is created
+3. Batch instances are loaded from settings
+4. Batch instances are saved in self.batches with key=uri, value=
+   Batch instance for that uri
 ```
 
 When using a Batch class as a trigger:
@@ -361,18 +408,20 @@ When using a Batch class as a trigger:
     i. iterate through slots
     ii. if slot accepts the item       // assuming this feature is implemented after item filter
         a. export the item
-        b. call slot.batch.update() to update paramter value
-        c. call slot.batch.should_trigger() to check if parameter value has exceeded
+        b. call self.batches[slot.uri].update(slot.file) to update paramter value
+        c. call self.batches[slot.uri].should_trigger() to check if parameter value has exceeded
            constraint
-            1. if True, close and start a new batch of the feed
+            1. if True
+                i. call self.trigger_batch(slot.uri)
+                ii. call self.batches[slot.uri].reset_para_val()
             2. else, continue the iteration
     iii. continue slot iteration till complete
 ```
 
-When using a signal as a trigger:
+When using signal as a trigger:
 
 ```
-1. logic code from spider generates signal.stop_batch with the feed_uri as argument
+1. in spider, logic code calls self.trigger_batch(feed_uri)
 2. FeedExporter catches signal.stop_batch and invokes trigger_batch method
 3. trigger_batch method determines which feed's batch to close using feed_uri argument
 4. feed_uri's batch is closed and a new batch is created using helper functions
@@ -401,10 +450,14 @@ When using a signal as a trigger:
   - ...
 
 - Write tests
+  
+  - ...
 
 **June 21, 2021 - July 5, 2021:** (Week 3-4)
 
 - Fix bugs and write documentation
+  
+  - ...
 
 - Start work on Feed Post Processing
 
@@ -431,7 +484,7 @@ When using a signal as a trigger:
 
 - ### Programming Experience:
   
-  - I was introduced to Python in my high school days. Since then I have explored and delved into computer sciences and applications ultimatley and obviously leading me to pursue a degree in Computer Science(currently in pre-final year).  Python has been my main language for a long time with trying some other languages on the side. I have basic understanding of software workflows and API design.
+  - I was introduced to Python in my high school days. Since then I have explored and delved into computer sciences and applications ultimatley and obviously leading me to pursue a degree in Computer Science(currently in pre-final year).  Python has been my main language for a long time with me trying my hand on some other languages on the side. I have basic understanding of software workflows and API design.
 
 - ### Personal Projects:
   
@@ -451,5 +504,3 @@ When using a signal as a trigger:
     - https://github.com/scrapy/scrapy/pull/4753
     
     - https://github.com/scrapy/scrapy/pull/4778
-      
-      
