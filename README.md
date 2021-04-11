@@ -365,7 +365,7 @@ FeedExporter modification to receive signal:
 
 ```python
 class FeedExporter:
-    
+
     @classmethod
     def from_crawler(cls, crawler):
         # original code
@@ -432,59 +432,76 @@ When using signal as a trigger:
 **May 17, 2021 - June 7, 2021** (Community bonding period)
 
 - Familiarize myself with Scrapy and Zyte community
-
 - Settle and discuss final design details with mentors
-
 - Discuss implementation plans 
-
 - Set up weekly report
 
 **June 7, 2021 - June 21, 2021:** (Week 1-2)
 
 - Start work on Batch Delivery Trigger
-
-- Layout code refactor plan
-
+- Layout code refactor plan (similar steps will be repeated for other enhancements)
+  - Figure out affected code from control flow
+  - use proposed designs to plan code refactoring
 - Start coding
-  
-  - ...
-
+  - create ```Batch``` class and associated methods
+  - Refactor ```FeedExporter``` init method to take in Batch classes
+  - Modify ```FeedExporter``` item_scraped method to use Batch classes
+  - Add trigger_batch method to ```FeedExporter``` class
+  - Modify Spider class to add signal trigger and connect it to ```FeedExporter```
 - Write tests
-  
-  - ...
 
 **June 21, 2021 - July 5, 2021:** (Week 3-4)
 
-- Fix bugs and write documentation
-  
-  - ...
-
+- Fix bugs and write documentation (similar steps will be repeated for other enhancements)
+  - Analyse side effects due to new code additions
+  - Add docstrings to new classes and methods
+  - Add entries to official documentation
 - Start work on Feed Post Processing
-
-- ...
+- Layout code refactor plan for Feed Post Processing
+- Start coding
+  - create PostProcessigManager class and methods
+  - create PostProcessorPlugin interface
+  - create builtin plugins: minifyer, pretty-printer, compressor
+  - Modify FeedExporter and _FeedSlot to use PostProcessingManager
 
 **July 5, 2021 - July 19, 2021:** (Week 5-6)
 
-- ...
+- Tests for Feed Post Processing
+- Documentation and bug fixes for Feed Post Processing
+- Start work on Item Filters
+- Plan for code refactor
+- **First Evaluations** (July 12-16)
 
 **July 19, 2021 - August 2, 2021:** (Week 7-8)
 
-- ...
+- Start coding
+  - Create ItemChecker class and methods
+  - Modify FeedExporter to use ItemChecker
+- Tests for Item Filters
+- Documentation and Bug fixes
 
 **August 2, 2021 - August 16, 2021:** (Week 9-10)
 
-- ...
+- Polish and optimize new enhancements
+- Improve docs
+- Can also be used a buffer period for unforseen circumstances
+
+**August 16, 2021 - August 21, 2021:**
+
+- Code, project submission
+- **Final Evaluations**
 
 ## Possible Roadblocks
 
 - undesirable side effects of new implementations
-- ...
+- inefficiencies in compression plugin because of proposed design
+- feature additions apart from this project (will require redesigning plans)
 
 ## Technical Knowledge
 
 - ### Programming Experience:
   
-  - I was introduced to Python in my high school days. Since then I have explored and delved into computer sciences and applications ultimatley and obviously leading me to pursue a degree in Computer Science(currently in pre-final year).  Python has been my main language for a long time with me trying my hand on some other languages on the side. I have basic understanding of software workflows and API design.
+  - I was introduced to Python in my high school days. Since then I have explored and delved into computer sciences and applications ultimatley and obviously leading me to pursue a degree in Computer Science(currently in pre-final year).  Python has been my main language for a long time with me trying my hand on some other languages on the side. I am adept with git and Linux. I have basic understanding of software workflows and API design.
 
 - ### Personal Projects:
   
@@ -494,13 +511,8 @@ When using signal as a trigger:
 - ### Open Source Contributions:
   
   - [openage](https://github.com/SFTtech/openage)
-  
   - [lxd](https://github.com/lxc/lxd/)
-  
   - [scrapy](https://github.com/scrapy/scrapy)
-    
     - https://github.com/scrapy/scrapy/pull/4752
-    
     - https://github.com/scrapy/scrapy/pull/4753
-    
     - https://github.com/scrapy/scrapy/pull/4778
