@@ -20,13 +20,13 @@ Country: India
 
 ## Abstract
 
-This project aims to add enhancements to Scrapy's Feed Exporter components. These enhancements consists of item filters, feed post-processing and batch delivery triggers. 
+This project aims to add enhancements to Scrapy's Feed Exporter components. These enhancements consists of item filters, feed post-processing and batch delivery triggers.    Currently there are no convenient ways to filter items before they can be exported. Item filter feature will provide such ways and interface. A Feed post-processing enhancement will enable plugins such as compression, minifying, beautifier, etc. which can then be added to the Feed exporting workflow. Batch creation was a recently introduced feature but was limited to only item count constraints. Batch Deliver triggers will be able to make the constraints flexible and give more control to user to create batches.
 
 ## Deliverables
 
 - Item filters which will decide what items must or must not be exported
 
-- Feed post processing feature which will use pluginable components to process export files before storing them
+- Feed post processing feature which will use pluginable components to process scraped data before storing them
 
 - Batch delivery triggers based on certain constraints which can also be user defined
 
@@ -40,7 +40,7 @@ Items can be filtered based on their class type or/and on some certain condition
 
 There will be 3 main public methods which will be used in item filtering of which ```accepts_item``` and ```accepts_fields``` can be overridden by user. Subdividing ```accepts``` into 2 methods will help create simple code and will be easier to debug and test.
 
-These filters can be declared in ```settings.py```. When the ```FeedExporter``` is initialised, ```load_object``` loads the declared filters. These loaded filters can then be used by storage slots.
+These filters can be declared in ```settings.py```. When the ```FeedExporter``` is initialised, ```load_object``` loads the declared filters. These loaded filters can then be used by storage slots. Some common item filtering use cases can be exposed through ```settings.py``` as well such as accepting certain item classes. Custom item checkers thus can also expose certain feed options in ```settings.py```.
 
 **Definitions/Examples:** 
 
@@ -52,8 +52,9 @@ more attrubutes and methods):
 class ItemChecker:
     accepted_items = []    # list of Items user wants to accept
 
-    def __init__(self):
-        # load accepted_items here 
+    def __init__(self, feed_options):
+        # 1. populate accepted_items from feed_options if present
+        # 2. load items from accepted_items
 
     def accepts(self, item):
         """
@@ -99,21 +100,18 @@ class ItemChecker:
 ```settings.py``` example:
 
 ```python
+from myproject.filterfile import MyFilter1
+from myproject.items import MyItem1, MyItem2
+
 FEEDS = {
     'items1.json': {
         'format': 'json',
-        'item_filter': 'MyFilter1'
+        'item_filter': MyFilter1,
     },
     'items2.xml': {
         'format': 'xml',
-        'item_filter': 'MyFilter2',
+        'accepted_items': (MyItem1, MyItem2),
     },
-}
-
-
-ITEM_FILTERS = {
-    'MyFilter1': 'myproject.filterfile.MyFilter1',
-    'MyFilter2': 'myproject.filterfile.MyFilter2',
 }
 ```
 
@@ -124,6 +122,7 @@ Loading the declared filter:
 ```
 1. FeedExporter initialises
     i. FeedExporter.filters dict is loaded with (key: uri, value: filter class) from ITEM_FILTERS
+    ii. if no filter declared for uri, load the default item filter
 2. when _start_new_batch is invoked
     i. instance of filter assigned for the slot's uri is created
     ii. slot is initialised with filter as one of the attributes
@@ -143,13 +142,13 @@ Using the filter:
 
 **Solution:** 
 
-A post-processing feature can help add more extensions dedicated to before-export-processing to scrapy. To help achieve extensibility, a ```PostProcessingManager``` can be used which will use "plugin" like scrapy components to process the feed file before exporting it to its target destination. 
+A post-processing feature can help add more extensions dedicated to before-export-processing to scrapy. To help achieve extensibility, a ```PostProcessingManager``` can be used which will use "plugin" like scrapy components to process the data before writing it to target files.
 
-Every slot can have their own ```PostProcessingManager``` which can then be called before closing the slot to do all the required processing.
+The ```PostProcessingManager``` can act like a wrapper to the slot's storage so whenever a write event takes place, the data is run through the plugins in a pipeline-ish way to be processed and then written to the target file.
 
-A number of plugins can be created but there will be a need to specify the order in which these plugins are used as some won't be able to process the target file after it has been processed by another(eg: minifying won't work on a compression processed file). These plugins will be required to have a certain Interface so that the ```PostProcessingManager``` can use it without breaking down from unidentified components.
+A number of plugins can be created but there will be a need to specify the order in which these plugins are used as some won't be able to process the data after it has been processed by another(eg: minifying won't work on a compression processed file). These plugins will be required to have a certain Interface so that the ```PostProcessingManager``` can use it without breaking down from unidentified components.
 
-Few built-in plugins can be made such as minifying, pretty-printing and compression.
+Few built-in plugins can be made such as for compressions: gzip, lzma, bz2.
 
 **Definitions/Examples:** 
 
@@ -158,16 +157,18 @@ PostProcessingManager class prototype:
 ```python
 class PostProcessingManager:
     """
-    This will manage all plugins and will use them to conduct post-
-    processing on feed files before they are exported.
+    This will manage and use declared plugins to process data in a
+    pipeline.
     :param plugins: all the declared plugins for the uri
     :type plugins: list
+    :param file: target file whose data will be processed before write
+    :type file: file like object
     """
 
-    def __init__(self, plugins):
+    def __init__(self, plugins, file):
         # load the plugins here
 
-    def process(self, file):
+    def write(self, data):
         """
         Main method to be used to process a file using all the declared 
         plugins.
@@ -175,7 +176,12 @@ class PostProcessingManager:
         :type file: File-like object
         """
 
-    def _process_using(self, plugin, file):
+    def close(self):
+        """
+        Close the target file along with all the plugins.
+        """
+
+    def _process_using(self, plugin, data):
         """
         Process the file using the given plugin.
         :param plugin: The plugin that will be used for post-processing on the file
@@ -194,16 +200,39 @@ PostProcessorPlugin class inteface:
 class PostProcessorPlugin(Interface):
     """
     Interface for plugins that will be used by PostProcessingManager.
+    Mostly will act as an file like object with additional methods for
+    processing intermediate data.
     """
 
-    def __init__(self):
+    def __init__(self, file):
         """
-        Constructor method.
+        Constructor method. Takes in a file like object which will be the
+        target file where the processed data will be written to.
         """
 
-    def process(self, file):
+    def write(self, data):
         """
-        Method which will do the processing on the given file.
+        Exposed method which will take data passed, process it and then
+        write it to target file.
+        :param data: data passed to be written to target file
+        :type data: bytes
+        :return: returns number of bytes written
+        :rtype: int
+        """
+
+    def close(self):
+        """
+        Closes this plugin wrapper.
+        """
+
+    @staticmethod
+    def process(data):
+        """
+        This will process the data and return it.
+        :param data: input data
+        :type data: bytes
+        :return: processed data
+        :rtype: bytes
         """
 ```
 
@@ -214,11 +243,20 @@ GzipPlugin example:
 class GzipPlugin:
     COMPRESS_LEVEL = 9
 
-    def __init__(self):
-        # constructor
+    def __init__(self. file):
+        # initialise various parameters for gzipping
+        self.file = gzip.GzipFile(fileobj=file, mode=file.mode,
+                                  compresslevel=self.COMPRESS_LEVEL)
 
-    def process(self, file):
-        # use gzip module methods to compress the given file
+    def write(self, data):
+        return self.file.write(data)
+
+    def close(self):
+        self.file.close()
+
+    @staticmethod
+    def process(data):
+        return gzip.compress(data, compresslevel=self.COMPRESS_LEVEL)
 ```
 
 settings.py example:
@@ -230,10 +268,7 @@ FEEDS = {
         'post-processing': ['gzip'],
     },
     'item2.xml' : {
-        'post-processing': ['beautify','xz'],    # order is important
-    },
-    'item3.jl': {
-        'post-processing': ['myplugin'],
+        'post-processing': ['myplugin','xz'],    # order is important
     },
 }
 
@@ -241,7 +276,6 @@ FEEDS = {
 POST_PROC_PLUGINS = {
     'gzip': 'scrapy.utils.postprocessors.GzipPlugin',
     'xz' : 'scrapy.utils.postprocessors.LZMAPlugin',
-    'beautify': 'scrapy.utils.postprocessors.BeautifyPlugin',
     'myplugin': 'myproject.pluginfile.MyPlugin',
 }
 ```
@@ -254,18 +288,7 @@ Initialising slot with ```PostProcessingManager```:
 1. FeedExporter is initialised
 2. _start_new_batch is invoked
     i. PostProcessingManager instance is created for the given uri
-    ii. the instance is passed to _FeedSlot
-    iii. _FeedSlot makes the instance as one of its attributes
-```
-
-PostProcessingManager usage from slot:
-
-```
-1. _close_slot is called from FeedExporter
-2. slot invokes slot.finish_exporting
-    i. exporter finished exporting
-    ii. PostProcessingManager invokes its 'process' method which processes the
-        slot's file using plugins
+    ii. the instance is wrapped around the slot's storage
 ```
 
 3. #### Batch Delivery Triggers
@@ -276,9 +299,11 @@ Batch delivery can be simplified and made extensible by creating a class ```Batc
 
 ```BatchPerXItems```, ```BatchPerXMins```, and ```BatchPerXBytes``` can be created as builtins with each inhereting parent class ```Batch```. These can be located in  ```scrapy/utils```.  
 
-Desired Batch class can then be activated in ```settings.py``` with a constraint. If no constraint is set, it will be pointless to load the specified Batch class. Users can add their own custom Batch class by specifying their class path.
+A parameter value `para_val` is stored in the `Batch` class which will be used to compare against the declared `constraint`. A `para_val` for ```BatchPerXItems``` can be the number of total items currently in the batch, for ```BatchPerXMins``` it can be total mins passed since it was created. So some ```update``` calls to update the ```para_val``` may not require a ```slot_file```.
 
-To stop and create a new batch from the Spider itself a signal can be used. This will require ```Spider``` class to have a method ```self.trigger_batch(feed_uri)``` which will send signal ```signal.stop_batch``` with the feed's URI as argument which can then be intercepted by ```FeedExporter``` and appropriately call a method to stop and start a new batch for the specified feed. A new method in ```FeedExporter``` will be needed to trigger batch delivery as ```item_scraped``` method is used when an item is scraped.
+Desired Batch class can then be activated in ```settings.py``` with a constraint. To help users create complex triggers they could set the constraint to any builtin type or any arbitrary object to suit their needs. If no constraint is set, it will be pointless to load the specified Batch class. Users can add their own custom Batch class by specifying their class path.
+
+To stop and create a new batch from the Spider itself a signal can be used. This will require the user to create a method ```self.trigger_batch(feed_uri)``` which will send signal ```signal.stop_batch``` with the feed's URI as argument which can then be intercepted by ```FeedExporter``` and appropriately call a method to stop and start a new batch for the specified feed. A new method in ```FeedExporter``` will be needed to trigger batch delivery as ```item_scraped``` method is used when an item is scraped.
 
 **Definitions/Examples:** 
 
@@ -286,19 +311,30 @@ Batch class template:
 
 ```python
 class Batch:
+    """
+    Batch which will store information for current batches and provides
+    suitable methods to check and update batch info.
+    :param slot_uri: uri for which batch is being created
+    :type slot_uri: string
+    :param constraint: a constraint or limit to figure out when a new batch
+        must be created.
+    :param para_val: a parameter value which will be updated and be compared
+        against constraint to control batch creation.
+    :param batch_id: id number of the current batch.
+    """
 
-    def __init__(self, slot_uri, constraintone, para_val=None):
+    def __init__(self, slot_uri, constraint, para_val=0):
         self.uri = slot_uri
         self.constraint = constraint
         self.para_val = para_val
         self.batch_id = 1
 
-    def update(self, slot_file=None):
+    def update(self, slot_file):
         """
         Updates the parameter value according to stats related to paramter
         value and contraint.
         :param slot_file: slot's file which is a good source of stats
-        :type slot_file: File like object, optional
+        :type slot_file: File like object
         """
 
     def should_trigger(self):
@@ -318,6 +354,8 @@ class Batch:
 settings.py example:
 
 ```python
+from myproject.customclassfile import CustomBatch
+
 {
     'items1.json': {
         'format': 'json',
@@ -329,36 +367,17 @@ settings.py example:
     },
     'items3.json': {
         'format': 'json',
-        'batch_constraint': ('custom', 10)
+        'batch_constraint': (CustomBatch, 10)
     },
 }
 
 
-FEED_BATCH_TRIGGER = {
-    'custom': 'myproject.customclassfile.CustomBatch'
-}
-
-
-FEED_BATCH_TRIGGER_BASE = {
+# builtin triggers
+FEED_BATCH_TRIGGER_BASE = {                             
     'item_count': 'scrapy.utils.feedbatch.BatchByXItems',
     'byte_size': 'scrapy.utils.feedbatch.BatchByXBytes',
     'time_interval': 'scrapy.utils.feedbatch.BatchByXMins',
 }
-```
-
-Spider class method to send signal:
-
-```python
-class Spider(object_ref):
-    # ...
-    # original Spider class codes
-    # ...
-
-    def trigger_batch(self, uri):
-        self.crawler.send_catch_log(
-            signal=signals.stop_batch,
-            uri=uri
-        )
 ```
 
 FeedExporter modification to receive signal:
@@ -389,16 +408,31 @@ class FeedExporter:
         # 3. else, return
 ```
 
+To trigger batch deliveries from their spiders, users can create their own custom method as follows which passes the uri whose batch will be triggered using the `signal.stop_batch` signal. This can be added as a suggestion in the documentations.
+
+```python
+class MySpider(Spider):
+    # ...
+    # user spider code
+    # ...
+
+    def trigger_batch(self, uri):
+        self.crawler.send_catch_log(
+            signal=signals.stop_batch,
+            uri=uri
+        )
+```
+
 **Control Flow:** 
 
 Batch instance creation:
 
 ```
 1. FeedExporter is initialised
-2. self.batches is created
+2. self.batches dict is created
 3. Batch instances are loaded from settings
-4. Batch instances are saved in self.batches with key=uri, value=
-   Batch instance for that uri
+4. Batch instances are saved in self.batches with (key=uri, value=
+   Batch instance) for that uri
 ```
 
 When using a Batch class as a trigger:
@@ -434,7 +468,7 @@ When using signal as a trigger:
 - Familiarize myself with Scrapy and Zyte community
 - Settle and discuss final design details with mentors
 - Discuss implementation plans 
-- Set up weekly report
+- Set up weekly report blog
 
 **June 7, 2021 - June 21, 2021:** (Week 1-2)
 
@@ -447,7 +481,6 @@ When using signal as a trigger:
   - Refactor ```FeedExporter``` init method to take in Batch classes
   - Modify ```FeedExporter``` item_scraped method to use Batch classes
   - Add trigger_batch method to ```FeedExporter``` class
-  - Modify Spider class to add signal trigger and connect it to ```FeedExporter```
 - Write tests
 
 **June 21, 2021 - July 5, 2021:** (Week 3-4)
@@ -461,7 +494,7 @@ When using signal as a trigger:
 - Start coding
   - create PostProcessigManager class and methods
   - create PostProcessorPlugin interface
-  - create builtin plugins: minifyer, pretty-printer, compressor
+  - create builtin plugins for compressions
   - Modify FeedExporter and _FeedSlot to use PostProcessingManager
 
 **July 5, 2021 - July 19, 2021:** (Week 5-6)
@@ -483,6 +516,7 @@ When using signal as a trigger:
 **August 2, 2021 - August 16, 2021:** (Week 9-10)
 
 - Polish and optimize new enhancements
+- Tie up loose ends
 - Improve docs
 - Can also be used a buffer period for unforseen circumstances
 
@@ -494,7 +528,6 @@ When using signal as a trigger:
 ## Possible Roadblocks
 
 - undesirable side effects of new implementations
-- inefficiencies in compression plugin because of proposed design
 - feature additions apart from this project (will require redesigning plans)
 
 ## Technical Knowledge
@@ -516,3 +549,11 @@ When using signal as a trigger:
     - https://github.com/scrapy/scrapy/pull/4752
     - https://github.com/scrapy/scrapy/pull/4753
     - https://github.com/scrapy/scrapy/pull/4778
+
+- ### Other Remarks:
+  
+  - I have not submitted proposals to any other organisations.
+  
+  - My summer vacations will start in May till early July. College will start sometime in mid July. Placement exams may start in mid August. According to the scheduled timeline this shouldn't put me off track from completing the project.
+  
+  - I will take responsibilty for the implementations and actively try to fix bugs encountered after the deployments of the code.
